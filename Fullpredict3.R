@@ -30,7 +30,6 @@ if (!file.exists(process_fulldir)) { dir.create(process_fulldir) }  # process_fu
 if (!file.exists(textdir)) { dir.create(textdir) }  #  data will reside in datadir
 if (!file.exists(gramdir)) { dir.create(gramdir) }  #  gram will reside in datadir
 
-library(jsonlite)
 library(rbenchmark)
 library(microbenchmark)
 library(proftools)
@@ -48,6 +47,8 @@ initialize <- function(x,n=7) {
         #' initialize(CS80Gram)   initializes up to 7-gram 
         #' initialize(CS80Gram,3) initializes up to trigram
         stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(x))
+        extract <- magrittr::extract
+        filelist<-list()
         filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"0")})
         x <- list()
         x <- sapply (seq_along (filelist), function(i) { 
@@ -55,6 +56,8 @@ initialize <- function(x,n=7) {
                 load(file=filename)
                 x[[i]] <- Vocabulary 
                 })  # only retain the Gram
+        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract(.>5) } )
+        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract %>% -5L } )
         x
 }
 initialize_Level3<-cmpfun(initialize,options = list(optimize=3))
@@ -160,10 +163,16 @@ z<-runif(1e3)
 Rprof("Rprof.out")
 Gram<-initialize_Level3("CS80",n=4)      # work with Cleaned Sampled 80% data up to trigram
 z<-runif(1e3)
+
 Rprof("Rprof.out")
 x<-"me about his"
-n<-sapply(strsplit(x, " "), length)     # count words
+# n<-sapply(strsplit(x, " "), length)     # count words
 x %>% prepare_Level3 %>% suggest_nlpmodel_Level3(model=1) -> m1;m1
+Rprof(NULL)
+summaryRprof("Rprof.out")
+
+Rprof("Rprof.out")
+x<-"me about his"
 x %>% google_predictor -> m2;m2
 Rprof(NULL)
 summaryRprof("Rprof.out")
