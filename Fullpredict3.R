@@ -38,26 +38,29 @@ library(stringi)
 library(compiler)
 
 
-initialize <- function(x,n=7) {
+initialize <- function(x,n,level=0L) {
         #' load('CS80GramX0.RData')
         #' @param x the name of the grambase (e.g. "CS80") 
         #' @param n integer the number of grams to load
+        #' @param level integer to trim
         #' @return a list of grams in x 
         #' @examples 
         #' initialize(CS80Gram)   initializes up to 7-gram 
         #' initialize(CS80Gram,3) initializes up to trigram
-        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(x))
+        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen,
+                   is.numeric(level), is.finite(level), level >= 0, is.character(x))
         extract <- magrittr::extract
         filelist<-list()
-        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"0")})
+        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"X")})
         x <- list()
+        print ("Reading Gram:")
         x <- sapply (seq_along (filelist), function(i) { 
                 paste( gramdir, filelist[i], sep="/") %>% paste0(".RData") -> filename
                 load(file=filename)
-                x[[i]] <- Vocabulary 
-                })  # only retain the Gram
-        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract(.>5) } )
-        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract %>% -5L } )
+                print (c(filelist[i],", "))
+                x[[i]] <- Vocabulary  })  # only retain the Gram
+        x <- pblapply(1:n, function(i) { x[[i]] %<>% extract(.> level) } )
+        x <- lapply(1:n, function(i) { x[[i]] %<>% extract %>% -level } )
         x
 }
 initialize_Level3<-cmpfun(initialize,options = list(optimize=3))
@@ -161,13 +164,16 @@ google_predictor_Level3<-cmpfun(google_predictor,options = list(optimize=3))
 ######### Example follow
 z<-runif(1e3)
 Rprof("Rprof.out")
-Gram<-initialize_Level3("CS80",n=4)      # work with Cleaned Sampled 80% data up to trigram
+Gram<-initialize_Level3("GTCS80",n=4,level=0)      # work with Cleaned Sampled 80% data up to trigram
 z<-runif(1e3)
+Rprof(NULL)
+summaryRprof("Rprof.out")
 
 Rprof("Rprof.out")
-x<-"me about his"
-# n<-sapply(strsplit(x, " "), length)     # count words
+x<-"live and I'd"
+n<-sapply(strsplit(x, " "), length)     # count words
 x %>% prepare_Level3 %>% suggest_nlpmodel_Level3(model=1) -> m1;m1
+x %>% google_predictor -> m2;m2
 Rprof(NULL)
 summaryRprof("Rprof.out")
 
