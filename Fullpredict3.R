@@ -6,7 +6,8 @@ Sys.info()[1:5]                         # system info but exclude login and user
 userdir<-getwd()                        # user-defined startup Capstone directory
 library(magrittr)
 library(stringi)
-library(tm)
+# library(tm)
+library(pbapply)
 library(rbenchmark)
 library(microbenchmark)
 library(proftools)
@@ -65,14 +66,14 @@ initialize <- function(x,n,level=0L) {
 }
 initialize_Level3<-cmpfun(initialize,options = list(optimize=3))
 
-prepare <- function(x)  {
+suggest_nlpmodel <- function(x) {
         #' initialize
         #' @param x the input string
         #' @return a pattern list of regex encoded tokens in x 
         #' @examples 
         #' initialize(mystring)   initializes, tokenizes and Regex prepares a patern list for grep 
-        ## Prepare x and return pattern list in x
-        stopifnot(is.character(x), is.finite(n), n > 0, n <= maxlen, is.character(x))
+        #' retain x, from a copy in y build a Regex pattern list 
+        stopifnot(is.character(x))
         #' To avoid :: calls 
         stri_split_boundaries <- stringi::stri_split_boundaries 
         stri_join <- stringi::stri_join  
@@ -84,53 +85,30 @@ prepare <- function(x)  {
         x %>% length -> len
         # Split into word tokens
         x <- sapply (1L:len, function(i) {stri_flatten(tail(x,i),collapse=" ")})
-        x %<>% gsub("\\'","\\\\\\'",.,ignore.case=TRUE,perl=TRUE,useBytes=TRUE) 
-        x <- sapply (1:(len+1L), function(i) {
-                x[i] <- ifelse (i > 1L, paste0("^(\\b",x[i-1L],")(?=[[:space:]])(.*)"),paste0("^(\\b",x[1],")(?![[:punct:]]|[[:alnum:]])") ) } )
-} 
-prepare_Level3<-cmpfun(prepare,options = list(optimize=3))
-
-
-suggest_nlpmodel <- function(x,model=1) {
+        x %<>%  gsub("\\'","\\\\\\'",.,ignore.case=TRUE,perl=TRUE,useBytes=TRUE) 
+        p <- X <- sapply (1:(len+1L), function(i) {
+                  ifelse (i > 1L, paste0("^(\\b",x[[i-1L]],")(?=[[:space:]])(.*)"),paste0("^(\\b",x[[1]],")(?![[:punct:]]|[[:alnum:]])") ) } ) 
         #' natural language processor to suggest continuation word
-        #' @param x the input string in  regex encoded tokens in x
-        #' @param model defines the model type as follows
-        #'        model = 1 for 'Simple Backoff' with s = 0.4 using full-grams
-        #'        model = 2 for 'weighted'Compounded' with backoff using full grams
-        #'        model = 3 for 'Simple Backoff' with s = 0.4 using skip-grams
-        #' @return a list of suggestion strings x in decreasing scores
-        #' @examples 
-        #' initialize(mystring)   initializes, tokenizes and Regex prepares a patern list for grep 
-        ## Prepare x and return pattern list in x
-        pattern <- x
-        n <- length(x)
-        x <- list()
-        y <- list()
-        x <- sapply (1:(n), function(i) {
-                .subset2(Gram,i)[grep(pattern[i],names(Gram[[i]]),ignore.case=TRUE,perl=TRUE,value=FALSE,useBytes=TRUE)] } )
+        #' The regex encoded list in y is processed to return a list of suggestion strings x in decreasing scores
+        #' saved pattern list in p
         # use default 'Stupid Backoff' factor
         s <- 0.4
-        ## Predict Algorithm
-        # initialize
-        x <- Filter(length,x)
-        n <- length(x)
-        x <- sapply(1:(n), function(i) { if (i > 1) {x[[i]] <- s^(n-i)*x[[i]]/sum(x[[i]])} else {x[[i]] <- s^(n-i)*x[[i]]/sum(Gram[[i]])} } ) 
-        x <- sapply(1:(n), function(i) { x[[i]] %<>% head(10)})         # only work on top of the lists
-        y <- sapply(1:(n), function(i) { y[[i]] <- sub(pattern[i],"\\2",names(x[[i]]),ignore.case=TRUE,perl=TRUE,useBytes=TRUE) } ) 
+        n <- length(p)
+        y <- list()
+        x <- sapply (1:(n), function(i) { .subset2(Gram,i)[grep((.subset2(p,i)),names(.subset2(Gram,i)),ignore.case=TRUE,perl=TRUE,value=FALSE,useBytes=TRUE)] } ) 
+        x <- Filter(length,x) 
+        ## Predict Algorithm starts here
+        n <- length(x)  # update length
+        x <- sapply(1:(n), function(i) { if (i > 1) { s^(n-i)*x[[i]]/sum(x[[i]])} else { s^(n-i)*x[[i]]/sum(Gram[[i]])} } ) 
+        x <- sapply(1:(n), function(i) { head(x[[i]],10) })         # only work on top of the lists
+        y <- sapply(1:(n), function(i) { sub(p[[i]],"\\2",names(x[[i]]),ignore.case=TRUE,perl=TRUE,useBytes=TRUE) } ) 
         y <- sapply(1:(n), function(i) { gsub("(^ )(.*)","\\2",y[[i]],ignore.case=TRUE,perl=TRUE,useBytes=TRUE) } )
-        y[[1]] <- "?"    # just in case we couldnot match anything
+        y[[1]] <- "?"    # just in case we could not match anything
         for (i in 1:(n)) { names(x[[i]]) <- y[[i]] }
         x %<>% rev %>% unlist 
-        switch ( as.character(model) ,
-        "1" = { },
-        "2" = { x %>% data.frame(suggestion=names(.),score=.,stringsAsFactors=FALSE) -> z
-                z <- aggregate(z$score,list(z$suggestion),sum)
-                names (z) <- c("suggestion","score")
-                x <- z[,2] ; names(x) <- z[,1] ; rm(z,n)
-                x %<>% sort(decreasing=TRUE) } )
-        x %<>% head(5) %>% names  
-}         
-suggest_nlpmodel_Level3<-cmpfun(suggest_nlpmodel,options = list(optimize=3))
+        x %<>% head(3) %>% names %>% as.vector 
+}          
+suggest_nlpmodel_Level3 <- cmpfun(suggest_nlpmodel, options = list(optimize=3) )
 
 google_predictor <- function(x) {
         #' retrieve suggestion from suggestqueries.google.com
@@ -161,6 +139,17 @@ google_predictor <- function(x) {
 
 google_predictor_Level3<-cmpfun(google_predictor,options = list(optimize=3))
 
+Turing_Predictr <- function(x) {
+        x %>% suggest_nlpmodel_Level3 -> x
+}
+
+Turing_Predictr_Level3<-cmpfun(Turing_Predictr,options = list(optimize=3))
+
+predict.baseline <- function(x) { x %<>% Turing_Predictr_Level3 }
+
+Turing_Predictr_Level3<-cmpfun(Turing_Predictr,options = list(optimize=3))
+
+FUN <- Turing_Predictr_Level3
 ######### Example follow
 z<-runif(1e3)
 Rprof("Rprof.out")
@@ -171,8 +160,8 @@ summaryRprof("Rprof.out")
 
 Rprof("Rprof.out")
 x<-"live and I'd"
-n<-sapply(strsplit(x, " "), length)     # count words
-x %>% prepare_Level3 %>% suggest_nlpmodel_Level3(model=1) -> m1;m1
+# n<-sapply(strsplit(x, " "), length)     # count words
+x %>% suggest_nlpmodel_Level3 -> m1;m1
 x %>% google_predictor -> m2;m2
 Rprof(NULL)
 summaryRprof("Rprof.out")
