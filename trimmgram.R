@@ -32,35 +32,68 @@ if (!file.exists(process_fulldir)) { dir.create(process_fulldir) }  # process_fu
 if (!file.exists(textdir)) { dir.create(textdir) }  #  data will reside in datadir
 if (!file.exists(gramdir)) { dir.create(gramdir) }  #  gram will reside in datadir
 
-initialize <- function(x,n) {
+initialize <- function(x,n,level=0) {
         #' load('CS80GramX0.RData')
         #' @param x the name of the grambase (e.g. "CS80") 
         #' @param n integer the number of grams to load
+        #' @param level integer to trim
         #' @return a list of grams in x 
         #' @examples 
         #' initialize(CS80Gram)   initializes up to 7-gram 
         #' initialize(CS80Gram,3) initializes up to trigram
-        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(x))
+        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen,
+                   is.numeric(level), is.finite(level), level >= 0, is.character(x))
         extract <- magrittr::extract
         filelist<-list()
         filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"0")})
         x <- list()
+        print ("Reading Gram:")
         x <- sapply (seq_along (filelist), function(i) { 
                 paste( gramdir, filelist[i], sep="/") %>% paste0(".RData") -> filename
                 load(file=filename)
+                print (c(filelist[i],", "))
                 x[[i]] <- Vocabulary  })  # only retain the Gram
-#        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract(.>5) } )
-#        x <- sapply(1:n, function(i) { x[[i]] %<>% unlist %>% extract %>% -5L } )
+        x <- pblapply(1:n, function(i) { x[[i]] %<>% extract(.> level) } )
+        x <- lapply(1:n, function(i) { x[[i]] %<>% extract %>% -level } )
         x
 }
 initialize_Level3<-cmpfun(initialize,options = list(optimize=3))
+
+initializeX <- function(x,n,level=0) {
+        #' load('CS80GramX0.RData')
+        #' @param x the name of the grambase (e.g. "CS80") 
+        #' @param n integer the number of grams to load
+        #' @param level integer to trim
+        #' @return a list of grams in x 
+        #' @examples 
+        #' initialize(CS80Gram)   initializes up to 7-gram 
+        #' initialize(CS80Gram,3) initializes up to trigram
+        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen,
+                   is.numeric(level), is.finite(level), level >= 0, is.character(x))
+        extract <- magrittr::extract
+        filelist<-list()
+        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"X")})
+        x <- list()
+        print ("Reading Gram:")
+        x <- sapply (seq_along (filelist), function(i) { 
+                paste( gramdir, filelist[i], sep="/") %>% paste0(".RData") -> filename
+                load(file=filename)
+                print (c(filelist[i],", "))
+                x[[i]] <- Vocabulary  })  # only retain the Gram
+        x <- pblapply(1:n, function(i) { x[[i]] %<>% extract(.> level) } )
+        x <- lapply(1:n, function(i) { x[[i]] %<>% extract %>% -level } )
+        x
+}
+initializeX_Level3<-cmpfun(initializeX,options = list(optimize=3))
+
+log10_ceiling <- function(x) { 10^(ceiling(log10(x))) }
+# plyr::round_any(x = 345, accuracy = 1000, f = ceiling) 
 
 Good_Turing <-function(x){ 
         #' Good-Turing applied to a Gram
         #' @param x the Gram to evaluate as a named integer list
         #' @return a list of bins(r) and their corresponding counts (Zr)
         #' @examples 
-        #' Good_Turing(x)   perform algorithm on list x
         mutate <- dplyr::mutate
         stopifnot (length(x)>0)
         y <- x    # work on a backup
@@ -92,8 +125,7 @@ Good_Turing <-function(x){
         while (df[i,1] == as.numeric(rownames(df[i,]))) {df[i,4] <-df[i+1L,1]*df[i+1L,2]/df[i,2]; i<-i+1}
         # now compute the Good Turing Estimates from log10(Zr)=a+b*Log10(r) fit
         df %<>% mutate(lr=log10(r),lZr=log10(Zr))
-        m<-lm(formula = lZr ~ lr, data=df,  method="qr")
-        summary(m)
+        m<-lm(formula = lZr ~ lr, data=df)
         # compute rstar = r*(1+1/r)^(b+1)
         df$GTE<-df[,1]*(1+1/df[,1])^(1+m$coefficients[2])
         # now compute SD(TE)
@@ -107,42 +139,45 @@ Good_Turing <-function(x){
         }
         # we now have a switchpoint to merge TE and GTE
         df$sdTE <- df$lr <- df$lZr <- df$sw <-NULL  # not needed any longer
-        df$rstar<-df$GTE
-        df$rstar[1:swpoint-1L]<-df$TE[1:swpoint-1L]
-        # now calculate the re-normalization factor (1-N1/N)
-        renorm <- 1L-df$Nr[1]/sum(df$Nr)
+        df$rstar <- df$GTE
+        if (swpoint > 1L) {df$rstar[1:swpoint-1L]<-df$TE[1:swpoint-1L]}
+        # now calculate the re-normalization factor (1-N1/N) only if swpoint > 1L
+        renorm <- ifelse (swpoint==1L, 1L, 1L-df$Nr[1]/sum(df$Nr))
         # now calculate the Simple Good Turing (SGT) estimate
         df$SGT<-df$rstar*renorm
-        plot(x=df[,1],y=df[,7]/df[,1], type='l',xlim=(c(1,1E8)),ylim=(c(0.5,1)),log = "x",
+        ymax<-10^(ceiling(log10(max(df[,7]/df[,1]))))
+        plot(x=df[,1],y=df[,7]/df[,1], type='l',xlim=(c(1,1E8)),ylim=(c(0,1)),log = "x",
              main="Simple Good-Turing Estimate",xlab="r,Frequency",ylab="r*/r Relative AdjustedFrequency",col="red")
         # now we recompute a integer SGT to use for our grams
-        df$RSGT<-ceiling(df$SGT)
+        df$RSGT<-as.integer(0.5 + df$SGT)
         df$trial<-df$SGT*df$Zr
-        plot(x=df[,1],y=df[,9], type='l',xlim=(c(1,1E8)),ylim=(c(1,50000)),log = "xy",
+        ymax<-10^(ceiling(log10(max(df[,9]))))
+        plot(x=df[,1],y=df[,9], type='l',xlim=(c(1,1E8)),ylim=(c(1,ymax)),log = "xy",
              main="Simple Good-Turing Estimate N.c*",xlab="r,Frequency",ylab="N c* 'constant'",col="red")
         df$Zr <- df$TE <- df$GTE <- df$rstar <- df$trial <- NULL
-        df$RSGT <- as.integer(df$RSGT)
         # now we need to fold back smoothed counts in original Gram
-        x <- pbsapply(len:1, function(i){ setNames(rep.int(df[i,4],length(x[x==df[i,1]])), names(x[x==df[i,1]])) } )
-}
+        xs <- rownames(head(df[df$r != df$RSGT,],1))    # easy find of index to start decrementing count
+        x[x>=xs] %<>% -1L
+        x
+} 
 Good_Turing_Level3<-cmpfun(Good_Turing,options = list(optimize=3))
 
 SGT_Normalize_Gram <- function(x) {
         #' Applies Simple Good Turing algorithm to all grams from Gram list
-        #' @param x the name of the gram list
+        #' @param x the gram list
         #' @return a list of SGT corrected grams in x 
         #' @examples 
         #' Normalize_Gram(Gram)   iApplies SGT to all grams in the Gram list
         n <- length(x)
         stopifnot (n > 0)
-        x <- pbsapply(1:n, function(i) { print(c("Applying SGT at Gram ",i,"..."))
-                                         x[i] %<>% unlist %>% Good_Turing_Level3 } )
+        for (i in 1:n) { x[[i]] %<>% Good_Turing_Level3 }
+        x
 }
 SGT_Normalize_Gram_Level3<-cmpfun(SGT_Normalize_Gram,options = list(optimize=3))
 
 Trim_Gram <- function(x,level) {
         #' Applies Trim level threshold specified to all grams from Gram list
-        #' @param x the name of the gram list
+        #' @param x the gram list
         #' @param level the threshold to trrim
         #' @return a list of SGT corrected grams in x 
         #' @examples 
@@ -150,35 +185,77 @@ Trim_Gram <- function(x,level) {
         extract <- magrittr::extract
         n <- length(x)
         stopifnot (n > 0,level > 0)
-        x <- pbsapply(1:n, function(i) { x[i] %<>% unlist %>% extract(.>level)  } )
+        x <- pblapply(1:n, function(i) { x[[i]] %<>% extract(.>level)  } )
+        x <- lapply(1:n, function(i) { x[[i]] %<>% extract %>% -level } )
+        x
 }
 Trim_Gram_Level3<-cmpfun(Trim_Gram,options = list(optimize=3))
 
-finalize <- function(x,n) {
+finalize <- function(x,y,n=maxlen) {
         #' save('GTCS80GramX0.RData')
-        #' @param x the name of the grambase (e.g. "CS80") 
-        #' @param n integer the number of grams to load
+        #' @param x the gram list
+        #' @param y the name of the grambase (e.g. "CS80") 
+        #' @param n integer the number of grams to save
         #' @return a list of grams in x 
         #' @examples 
-        #' finalize(GTCS80Gram)   finalizes up to 7-gram 
-        #' finalize(GTCS80Gram,3) finalizes up to trigram
-        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(x))
+        #' finalize(Gram,GTCS80)   finalizes up to 7-gram 
+        #' finalize(Gram,GTCS80,3) finalizes up to trigram
+        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(y))
         extract <- magrittr::extract
         filelist<-list()
-        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(x,"Gram",i,"0")})
+        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(y,"Gram",i,"0")})
+        print ("Writing Gram:")
         for (i in 1:length (filelist)) { 
                 paste( gramdir, filelist[i], sep="/") %>% paste0(".RData") -> filename
                 x[[i]] -> Vocabulary
+                print (c(filelist[i],", "))
                 save(list=c("Vocabulary"),file=filename)
         }  # only retain the Gram
         x
 }
-finalize_Level3<-cmpfun(initialize,options = list(optimize=3))
+finalize_Level3<-cmpfun(finalize,options = list(optimize=3))
+
+finalizeX <- function(x,y,n=maxlen) {
+        #' save('GTCS80GramX0.RData')
+        #' @param x the gram list
+        #' @param y the name of the grambase (e.g. "CS80") 
+        #' @param n integer the number of grams to save
+        #' @return a list of grams in x 
+        #' @examples 
+        #' finalize(Gram,GTCS80)   finalizes up to 7-gram 
+        #' finalize(Gram,GTCS80,3) finalizes up to trigram
+        stopifnot (is.numeric(n), is.finite(n), n > 0, n <= maxlen, is.character(y))
+        extract <- magrittr::extract
+        filelist<-list()
+        filelist <- sapply(1:n, function(i) {filelist[i] <- paste0(y,"Gram",i,"X")})
+        print ("Writing Gram:")
+        for (i in 1:length (filelist)) { 
+                paste( gramdir, filelist[i], sep="/") %>% paste0(".RData") -> filename
+                x[[i]] -> Vocabulary
+                print (c(filelist[i],", "))
+                save(list=c("Vocabulary"),file=filename)
+        }  # only retain the Gram
+        x
+}
+finalizeX_Level3<-cmpfun(finalizeX,options = list(optimize=3))
 
 
-n<-4L;level=5L
+n<-4L;level=8L
 Gram <- list()
-Gram <- initialize_Level3("S80",n=4L)       # work with Raw Sampled 80% data up to quadrigram
-Gram <- SGT_Normalize_Gram_Level3(Gram)
-Gram <- Trim_Gram_Level3(Gram,level=5L)
-Gram <- finalize_Level3("GTCS80",n=4L)      # save SGT and leveled Samples 80% data up to quadrigram
+Gram <- initialize_Level3("CS80",n=4L,level=8L)       # work with Raw Sampled 80% data up to quadrigram
+Gram_Original<-Gram
+Gram %<>% SGT_Normalize_Gram_Level3
+Gram %<>% Trim_Gram_Level3(level=5L)
+Gram %<>% finalize_Level3("GTCS80",n=4L)      # save SGT and leveled Samples 80% data up to quadrigram
+
+n<-4L;level=0L
+Gram <- list()
+Gram <- initializeX_Level3("CS80",n=4L,level=8L)       # work with Raw Sampled 80% data up to quadrigram
+Gram_Original<-Gram
+Gram %<>% SGT_Normalize_Gram_Level3
+Gram %<>% Trim_Gram_Level3(level=5L)
+Gram %<>% finalizeX_Level3("GTCS80",n=4L)      # save SGT and leveled Samples 80% data up to quadrigram
+
+filename <-paste(gramdir,"CS80Gram1X.RData",sep="/")    # trimmed S80Gram10
+load(file=filename)
+save(list=c("Vocabulary"),file=filename)
